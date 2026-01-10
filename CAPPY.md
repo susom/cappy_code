@@ -113,6 +113,12 @@ cappy_code/
 - **Impact**: `cappy chat` now works from any directory, survives reboots
 - **Command**: `export PATH="/Library/Frameworks/Python.framework/Versions/3.13/bin:$PATH"`
 
+### 🧮 Dynamic Max Token Calculation
+- New logic in cappy/ai_client.py dynamically computes the maximum tokens based on each model’s context.
+- Ensures responses don’t exceed model token limits.
+- Improves reliability when prompt length is large.
+- Introduced around Jan 9, 2026.
+
 ## Roadmap / TODO
 - Plan approval workflow (require_plan=true enforcement)
 - verify_command auto-run after apply
