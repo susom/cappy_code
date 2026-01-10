@@ -1,0 +1,23 @@
+# Ignore Python bytecode
+__pycache__/
+*.pyc
+
+# Ignore local environment files
+.env
+
+# Ignore build artifacts
+cappy.egg-info/
+cappy_code_dist.zip
+
+# Ignore logs
+logs/
+
+# Potential OS-specific files
+.DS_Store
+
+# Patch files if you don't want them
+*.patch
+
+# Claude additions
+CLAUDE.md
+.claudeignore

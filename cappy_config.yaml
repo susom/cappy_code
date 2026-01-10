@@ -1,0 +1,27 @@
+# Cappy Code Configuration
+# PHI-safe agentic code runner settings
+
+# Default model for agentic tasks
+default_model: o1
+
+# Allowed LLM models for agentic loops (code generation, reasoning, tool use)
+# Only models with JSON schema support for reliable structured output
+allowed_models:
+  - gpt-4.1       # Strong coding, good default
+  - gpt-5         # Latest OpenAI (schema support TBD)
+  - o1            # Deep reasoning, complex planning
+  - o3-mini       # Reasoning, faster/cheaper
+  - llama3370b    # LLaMA with schema support
+
+# Safety limits
+max_files_touched_per_run: 5
+
+# Require explicit plan approval before code changes
+require_plan: true
+
+# Command to run for verification (optional)
+# Examples: "pytest", "npm test", "make test"
+verify_command: null
+
+# Logging settings
+log_dir: "./logs"

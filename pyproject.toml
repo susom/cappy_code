@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cappy"
+version = "0.1.0"
+description = "PHI-safe agentic code runner CLI"
+readme = "AGENT.md"
+requires-python = ">=3.10"
+dependencies = [
+    "pyyaml>=6.0",
+    "python-dotenv>=1.0",
+    "requests>=2.31",
+]
+
+[project.scripts]
+cappy = "cappy.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
