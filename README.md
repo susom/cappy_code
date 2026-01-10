@@ -1,13 +1,13 @@
 # Cappy Code
 
 ## What is Cappy Code?
-Cappy Code is a PHI-safe agentic code runner (similar to Claude Code) that executes tasks in a controlled, auditable manner. It handles local file operations, shell commands, and more, but maintains guardrails for privacy and compliance. You can easily integrate it into projects that require secure manipulation of PHI (Protected Health Information).
+Cappy Code is a PHI-safe agentic code runner (similar to Claude Code) that executes tasks in a controlled, auditable manner. It handles local file operations, shell commands, and more, but maintains guardrails for privacy and compliance.
 
 ## Local Setup
 
 1. **Clone or Copy the Repo**
    ```bash
-   git clone https://your-remote-repo-url.git
+   git clone git@github.com:susom/cappy_code.git
    cd cappy_code
    ```
 
@@ -20,7 +20,7 @@ Cappy Code is a PHI-safe agentic code runner (similar to Claude Code) that execu
 3. **Set up SecureChatAI Credentials**
    - Copy `.env.example` to `.env`.
    - Open `.env` and set the required environment variables (like `REDCAP_API_URL`, `REDCAP_API_TOKEN`), ensuring you keep these secrets out of source control.
-- IMPORTANT: You must also have a REDCap API token issued for the project with PID 34345 to use the SecureChatAI features.
+- IMPORTANT: You must also have a REDCap API token issued for the project PID 34345 to use the SecureChatAI features.
 
 4. **Find your Python Bin Directory**
    ```bash
@@ -31,8 +31,8 @@ Cappy Code is a PHI-safe agentic code runner (similar to Claude Code) that execu
 5. **Add to Path**
    For macOS (Zsh):
    ```bash
-echo 'export PATH="/path/to/your/python/bin:$PATH"' >> ~/.zshrc
-source ~/.zshrc
+   echo 'export PATH="/path/to/your/python/bin:$PATH"' >> ~/.zshrc
+   source ~/.zshrc
    ```
    Adjust accordingly for your shell/OS.
 
@@ -60,3 +60,4 @@ cappy chat
 ```
 
 That’s it! Enjoy using Cappy Code for secure agentic automation.
+
