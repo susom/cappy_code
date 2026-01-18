@@ -10,7 +10,8 @@ from cappy import __version__
 from cappy import tools
 from cappy.agent import run_agent
 from cappy.chat import run_chat
-from cappy.config import get_config
+from cappy.config import get_config, validate_config
+from cappy.analytics import analyze_logs
 from cappy.logger import log_action
 
 
@@ -113,6 +114,31 @@ def cmd_chat(args):
     return 0
 
 
+def cmd_config_validate(args):
+    """Handle config validate command."""
+    is_valid, errors = validate_config(args.config)
+    
+    if is_valid:
+        print("✅ Configuration is valid")
+        return 0
+    else:
+        print("❌ Configuration has errors:")
+        for error in errors:
+            print(f"  - {error}")
+        return 1
+
+
+def cmd_analytics(args):
+    """Handle analytics command."""
+    config = get_config()
+    log_dir = config.get("log_dir", "./logs")
+    
+    report = analyze_logs(log_dir=log_dir, days=args.days)
+    print(report)
+    
+    return 0
+
+
 def main():
     parser = argparse.ArgumentParser(
         prog="cappy",
@@ -170,6 +196,19 @@ def main():
     p_chat = subparsers.add_parser("chat", help="Interactive chat with tools")
     p_chat.add_argument("--model", default=None, help="Model to use (default from config)")
     p_chat.set_defaults(func=cmd_chat)
+
+    # config
+    p_config = subparsers.add_parser("config", help="Configuration management")
+    config_subparsers = p_config.add_subparsers(dest="config_command", required=True)
+    
+    p_config_validate = config_subparsers.add_parser("validate", help="Validate configuration file")
+    p_config_validate.add_argument("--config", default=None, help="Path to config file")
+    p_config_validate.set_defaults(func=cmd_config_validate)
+
+    # analytics
+    p_analytics = subparsers.add_parser("analytics", help="Analyze usage logs and statistics")
+    p_analytics.add_argument("--days", type=int, default=7, help="Number of days to analyze (default: 7)")
+    p_analytics.set_defaults(func=cmd_analytics)
 
     args = parser.parse_args()
     return args.func(args)

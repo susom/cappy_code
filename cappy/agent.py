@@ -30,7 +30,7 @@ AGENT_RESPONSE_SCHEMA = {
         },
         "tool_name": {
             "type": "string",
-            "enum": ["scan", "search", "read", "write", "edit", "apply", "run"],
+            "enum": ["scan", "search", "read", "write", "edit", "apply", "run", "delete", "move", "copy"],
             "description": "Which tool to use (required if action=tool_call)"
         },
         "tool_args": {
@@ -85,13 +85,18 @@ BASE_SYSTEM_PROMPT = """You are Cappy, a PHI-safe code assistant. You help users
    Returns: success/failure
    Note: old_string must be unique in the file. If it appears multiple times, provide more context to make it unique.
 
-8. **apply** - Apply a unified diff patch (advanced, requires patch file)
-   Args: {"patch_path": "path/to/patch.diff"}
-   Returns: success/failure, files touched
+8. **delete** - Delete a file or directory
+   Args: {"filepath": "path/to/file", "confirm": true}
+   Returns: success/failure
+   Note: Requires confirm=true. Use with caution - deletion is permanent.
 
-9. **run** - Execute a shell command
-   Args: {"command": "shell command here", "timeout": 60}
-   Returns: exit_code, stdout, stderr
+9. **move** - Move or rename a file or directory
+   Args: {"src": "old/path", "dst": "new/path", "overwrite": false}
+   Returns: success/failure, src, dst
+
+10. **copy** - Copy a file or directory
+   Args: {"src": "source/path", "dst": "dest/path", "overwrite": false}
+   Returns: success/failure, src, dst, bytes_copied
 
 ## How to respond
 
@@ -245,6 +250,26 @@ def execute_tool(name: str, args: dict) -> dict:
             args.get("filepath", ""),
             args.get("old_string", ""),
             args.get("new_string", "")
+        )
+
+    elif name == "delete":
+        return tools.delete(
+            args.get("filepath", ""),
+            confirm=args.get("confirm", False)
+        )
+
+    elif name == "move":
+        return tools.move(
+            args.get("src", ""),
+            args.get("dst", ""),
+            overwrite=args.get("overwrite", False)
+        )
+
+    elif name == "copy":
+        return tools.copy(
+            args.get("src", ""),
+            args.get("dst", ""),
+            overwrite=args.get("overwrite", False)
         )
 
     else:

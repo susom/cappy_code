@@ -7,6 +7,36 @@ import subprocess
 from pathlib import Path
 from typing import Optional
 
+# Dangerous command patterns that should be blocked by default
+DANGEROUS_PATTERNS = [
+    r'rm\s+-rf',           # Recursive force delete
+    r'sudo\s+',            # Elevated privileges
+    r'>\s*/dev/',          # Writing to device files
+    r'mkfs',               # Format filesystem
+    r'dd\s+if=',          # Disk operations
+    r':(\)\{\s*:|:&\s*\};:', # Fork bomb
+    r'curl.*\|\s*bash',   # Pipe to shell
+    r'wget.*\|\s*sh',     # Pipe to shell
+    r'chmod\s+777',        # Overly permissive
+    r'\bkill\s+-9',       # Force kill
+]
+
+
+def is_dangerous_command(cmd: str) -> tuple[bool, Optional[str]]:
+    """
+    Check if command matches dangerous patterns.
+    
+    Args:
+        cmd: Shell command to check
+    
+    Returns:
+        Tuple of (is_dangerous, reason)
+    """
+    for pattern in DANGEROUS_PATTERNS:
+        if re.search(pattern, cmd, re.IGNORECASE):
+            return True, f"Command matches dangerous pattern: {pattern}"
+    return False, None
+
 
 def load_cappyignore(root: Path) -> list[str]:
     """
@@ -246,7 +276,8 @@ def read(filepath: str, start: int = 1, limit: Optional[int] = None) -> dict:
     }
 
 
-def write(filepath: str, content: str, overwrite: bool = False) -> dict:
+def write(filepath: str, content: str, overwrite: bool = False, 
+          create_snapshot: bool = True) -> dict:
     """
     Write content to a file.
 
@@ -254,6 +285,7 @@ def write(filepath: str, content: str, overwrite: bool = False) -> dict:
         filepath: Path to file (will create parent directories)
         content: Content to write
         overwrite: If False, refuse to overwrite existing files
+        create_snapshot: Create undo snapshot before overwriting
 
     Returns dict with:
         - success: bool
@@ -262,6 +294,15 @@ def write(filepath: str, content: str, overwrite: bool = False) -> dict:
         - error: str (if failed)
     """
     fpath = Path(filepath).resolve()
+
+    # Create snapshot before overwriting existing file
+    if create_snapshot and fpath.exists() and overwrite:
+        try:
+            from cappy.undo import get_undo_manager
+            undo_mgr = get_undo_manager()
+            undo_mgr.snapshot(f"Before write to {filepath}")
+        except Exception:
+            pass  # Continue even if snapshot fails
 
     # Safety: don't overwrite unless explicitly allowed
     if fpath.exists() and not overwrite:
@@ -290,7 +331,8 @@ def write(filepath: str, content: str, overwrite: bool = False) -> dict:
         return {"success": False, "error": f"Cannot write file: {e}"}
 
 
-def edit(filepath: str, old_string: str, new_string: str) -> dict:
+def edit(filepath: str, old_string: str, new_string: str, 
+         create_snapshot: bool = True) -> dict:
     """
     Perform surgical edit on a file by replacing old_string with new_string.
 
@@ -298,6 +340,7 @@ def edit(filepath: str, old_string: str, new_string: str) -> dict:
         filepath: Path to file to edit
         old_string: Exact string to find and replace
         new_string: String to replace it with
+        create_snapshot: Create undo snapshot before editing
 
     Returns dict with:
         - success: bool
@@ -316,6 +359,15 @@ def edit(filepath: str, old_string: str, new_string: str) -> dict:
 
     if not fpath.is_file():
         return {"success": False, "error": f"Path is not a file: {filepath}"}
+
+    # Create snapshot before editing
+    if create_snapshot:
+        try:
+            from cappy.undo import get_undo_manager
+            undo_mgr = get_undo_manager()
+            undo_mgr.snapshot(f"Before edit to {filepath}")
+        except Exception:
+            pass  # Continue even if snapshot fails
 
     # Read current content
     try:
@@ -453,20 +505,36 @@ def apply(patch_path: str, max_files: int = 5) -> dict:
     }
 
 
-def run(cmd: str, timeout: int = 60, cwd: Optional[str] = None) -> dict:
+def run(cmd: str, timeout: int = 60, cwd: Optional[str] = None, 
+        allow_dangerous: bool = False) -> dict:
     """
     Run a shell command and capture output.
+    
+    Args:
+        cmd: Shell command to execute
+        timeout: Timeout in seconds
+        cwd: Working directory
+        allow_dangerous: Allow dangerous commands (use with caution)
 
     Returns dict with:
         - exit_code: int
         - stdout: str
         - stderr: str
         - command: str
+        - warning: str (if dangerous command allowed)
     """
     work_dir = Path(cwd).resolve() if cwd else Path.cwd()
 
     if not work_dir.exists():
         return {"error": f"Working directory does not exist: {cwd}"}
+    
+    # Safety check for dangerous commands
+    is_dangerous, reason = is_dangerous_command(cmd)
+    if is_dangerous and not allow_dangerous:
+        return {
+            "error": f"Dangerous command blocked: {reason}. Use allow_dangerous=true to override.",
+            "command": cmd,
+        }
 
     try:
         result = subprocess.run(
@@ -478,13 +546,18 @@ def run(cmd: str, timeout: int = 60, cwd: Optional[str] = None) -> dict:
             cwd=str(work_dir),
         )
 
-        return {
+        response = {
             "command": cmd,
             "cwd": str(work_dir),
             "exit_code": result.returncode,
             "stdout": result.stdout[:10000] if result.stdout else "",
             "stderr": result.stderr[:10000] if result.stderr else "",
         }
+        
+        if is_dangerous:
+            response["warning"] = "Dangerous command was allowed to execute"
+        
+        return response
 
     except subprocess.TimeoutExpired:
         return {
@@ -502,3 +575,151 @@ def run(cmd: str, timeout: int = 60, cwd: Optional[str] = None) -> dict:
             "stdout": "",
             "stderr": str(e),
         }
+
+
+def delete(filepath: str, confirm: bool = False, 
+           create_snapshot: bool = True) -> dict:
+    """
+    Delete a file or directory.
+    
+    Args:
+        filepath: Path to file or directory
+        confirm: Must be True to actually delete
+        create_snapshot: Create undo snapshot before deleting
+    
+    Returns dict with:
+        - success: bool
+        - file: str (absolute path)
+        - error: str (if failed)
+    """
+    import shutil
+    
+    fpath = Path(filepath).resolve()
+    
+    if not fpath.exists():
+        return {"success": False, "error": f"Path does not exist: {filepath}"}
+    
+    if not confirm:
+        return {
+            "success": False,
+            "error": "Delete requires confirm=true. This operation cannot be undone without snapshots.",
+            "file": str(fpath),
+        }
+    
+    # Create snapshot before deleting
+    if create_snapshot:
+        try:
+            from cappy.undo import get_undo_manager
+            undo_mgr = get_undo_manager()
+            undo_mgr.snapshot(f"Before delete {filepath}")
+        except Exception:
+            pass  # Continue even if snapshot fails
+    
+    try:
+        if fpath.is_file():
+            fpath.unlink()
+        else:
+            shutil.rmtree(fpath)
+        
+        return {
+            "success": True,
+            "file": str(fpath),
+            "message": f"Deleted {filepath}",
+        }
+    except (OSError, IOError) as e:
+        return {"success": False, "error": f"Cannot delete: {e}"}
+
+
+def move(src: str, dst: str, overwrite: bool = False) -> dict:
+    """
+    Move or rename a file or directory.
+    
+    Args:
+        src: Source path
+        dst: Destination path
+        overwrite: Allow overwriting existing destination
+    
+    Returns dict with:
+        - success: bool
+        - src: str (absolute path)
+        - dst: str (absolute path)
+        - error: str (if failed)
+    """
+    import shutil
+    
+    src_path = Path(src).resolve()
+    dst_path = Path(dst).resolve()
+    
+    if not src_path.exists():
+        return {"success": False, "error": f"Source does not exist: {src}"}
+    
+    if dst_path.exists() and not overwrite:
+        return {
+            "success": False,
+            "error": f"Destination already exists: {dst}. Set overwrite=true to replace.",
+        }
+    
+    try:
+        shutil.move(str(src_path), str(dst_path))
+        
+        return {
+            "success": True,
+            "src": str(src_path),
+            "dst": str(dst_path),
+            "message": f"Moved {src} to {dst}",
+        }
+    except (OSError, IOError) as e:
+        return {"success": False, "error": f"Cannot move: {e}"}
+
+
+def copy(src: str, dst: str, overwrite: bool = False) -> dict:
+    """
+    Copy a file or directory.
+    
+    Args:
+        src: Source path
+        dst: Destination path
+        overwrite: Allow overwriting existing destination
+    
+    Returns dict with:
+        - success: bool
+        - src: str (absolute path)
+        - dst: str (absolute path)
+        - bytes_copied: int (for files)
+        - error: str (if failed)
+    """
+    import shutil
+    
+    src_path = Path(src).resolve()
+    dst_path = Path(dst).resolve()
+    
+    if not src_path.exists():
+        return {"success": False, "error": f"Source does not exist: {src}"}
+    
+    if dst_path.exists() and not overwrite:
+        return {
+            "success": False,
+            "error": f"Destination already exists: {dst}. Set overwrite=true to replace.",
+        }
+    
+    try:
+        if src_path.is_file():
+            shutil.copy2(str(src_path), str(dst_path))
+            bytes_copied = dst_path.stat().st_size
+            return {
+                "success": True,
+                "src": str(src_path),
+                "dst": str(dst_path),
+                "bytes_copied": bytes_copied,
+                "message": f"Copied {src} to {dst}",
+            }
+        else:
+            shutil.copytree(str(src_path), str(dst_path))
+            return {
+                "success": True,
+                "src": str(src_path),
+                "dst": str(dst_path),
+                "message": f"Copied directory {src} to {dst}",
+            }
+    except (OSError, IOError) as e:
+        return {"success": False, "error": f"Cannot copy: {e}"}
