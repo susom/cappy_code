@@ -228,7 +228,7 @@ def read(filepath: str, start: int = 1, limit: Optional[int] = None) -> dict:
     Read a file and return its contents.
 
     Args:
-        filepath: Path to file
+        filepath: Path to file (relative to current directory or absolute)
         start: Line number to start from (1-indexed)
         limit: Max lines to return (None = all)
 
@@ -238,13 +238,36 @@ def read(filepath: str, start: int = 1, limit: Optional[int] = None) -> dict:
         - start: int
         - end: int
     """
-    fpath = Path(filepath).resolve()
-
+    # Try as relative path first (relative to cwd)
+    fpath = Path(filepath)
+    
+    # If doesn't exist as relative, try resolving to absolute
     if not fpath.exists():
-        return {"error": f"File does not exist: {filepath}"}
+        fpath = Path(filepath).resolve()
+    
+    if not fpath.exists():
+        # Give helpful error with what we tried
+        cwd = Path.cwd()
+        return {
+            "error": f"File does not exist: {filepath}",
+            "tried": [str(Path(filepath)), str(Path(filepath).resolve())],
+            "cwd": str(cwd)
+        }
+    
+    if fpath.is_dir():
+        # It's a directory - list contents to help debug
+        try:
+            files = sorted([f.name for f in fpath.iterdir() if not f.name.startswith('.')])[:20]
+            return {
+                "error": f"Path is a directory, not a file: {filepath}",
+                "directory_contents": files,
+                "hint": "Specify a file inside this directory"
+            }
+        except Exception:
+            return {"error": f"Path is a directory, not a file: {filepath}"}
 
     if not fpath.is_file():
-        return {"error": f"Path is not a file: {filepath}"}
+        return {"error": f"Path exists but is not a regular file: {filepath}"}
 
     try:
         with open(fpath, "r", encoding="utf-8", errors="replace") as f:

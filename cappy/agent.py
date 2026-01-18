@@ -3,7 +3,7 @@
 import json
 import re
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Union
 
 from cappy import tools
 from cappy.ai_client import chat_completion, AGENTIC_MODELS, DEFAULT_MODEL
@@ -14,8 +14,8 @@ from cappy.logger import log_action
 MAX_ITERATIONS = 20
 MAX_TOOL_CALLS = 50
 
-# JSON Schema for structured agent responses
-# This enforces reliable tool calling and completion signaling
+# JSON Schema for structured agent responses with COMPLETE tool_args definition
+# Azure OpenAI strict mode requires all properties to be defined when additionalProperties=false
 AGENT_RESPONSE_SCHEMA = {
     "type": "object",
     "properties": {
@@ -35,20 +35,92 @@ AGENT_RESPONSE_SCHEMA = {
         },
         "tool_args": {
             "type": "object",
-            "description": "Arguments for the tool (required if action=tool_call)"
+            "description": "Arguments for the tool (required if action=tool_call). Use only the properties needed for the specific tool.",
+            "properties": {
+                # scan tool
+                "path": {
+                    "type": "string",
+                    "description": "File or directory path (for scan, search, read, write)"
+                },
+                # search tool
+                "pattern": {
+                    "type": "string",
+                    "description": "Regex pattern to search for (for search tool)"
+                },
+                "max_results": {
+                    "type": "integer",
+                    "description": "Maximum number of search results (for search tool)"
+                },
+                # read tool
+                "start": {
+                    "type": "integer",
+                    "description": "Starting line number (for read tool)"
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Maximum number of lines to read (for read tool)"
+                },
+                # write tool
+                "content": {
+                    "type": "string",
+                    "description": "File content to write (for write tool)"
+                },
+                "overwrite": {
+                    "type": "boolean",
+                    "description": "Allow overwriting existing file (for write, move, copy tools)"
+                },
+                # edit tool
+                "filepath": {
+                    "type": "string",
+                    "description": "File path (for edit, delete tools)"
+                },
+                "old_string": {
+                    "type": "string",
+                    "description": "Exact string to find and replace (for edit tool)"
+                },
+                "new_string": {
+                    "type": "string",
+                    "description": "Replacement string (for edit tool)"
+                },
+                # apply tool
+                "patch_path": {
+                    "type": "string",
+                    "description": "Path to patch file (for apply tool)"
+                },
+                # run tool
+                "command": {
+                    "type": "string",
+                    "description": "Shell command to execute (for run tool)"
+                },
+                "timeout": {
+                    "type": "integer",
+                    "description": "Timeout in seconds (for run tool)"
+                },
+                # delete tool
+                "confirm": {
+                    "type": "boolean",
+                    "description": "Confirmation required for destructive operations (for delete tool)"
+                },
+                # move and copy tools
+                "src": {
+                    "type": "string",
+                    "description": "Source path (for move, copy tools)"
+                },
+                "dst": {
+                    "type": "string",
+                    "description": "Destination path (for move, copy tools)"
+                }
+            },
+            "required": ["path", "pattern", "max_results", "start", "limit", "content", "overwrite", "filepath", "old_string", "new_string", "patch_path", "command", "timeout", "confirm", "src", "dst"],  # Azure strict mode requires ALL properties in required array
+            "additionalProperties": False  # Required by Azure OpenAI strict mode
         },
         "message": {
             "type": "string",
             "description": "Message to user - brief explanation of what you're doing, or final answer if action=done"
         }
     },
-    "required": ["action", "message"],
-    "if": {
-        "properties": {"action": {"const": "tool_call"}}
-    },
-    "then": {
-        "required": ["tool_name", "tool_args"]
-    }
+    "required": ["thinking", "action", "tool_name", "tool_args", "message"],
+    "additionalProperties": False
 }
 
 BASE_SYSTEM_PROMPT = """You are Cappy, a PHI-safe code assistant. You help users with code tasks by using tools.
@@ -104,14 +176,15 @@ Your response MUST be valid JSON matching this structure:
 {
   "thinking": "Brief reasoning about what to do next",
   "action": "tool_call" or "done",
-  "tool_name": "scan|search|read|write|apply|run" (required if action=tool_call),
-  "tool_args": {...} (required if action=tool_call),
+  "tool_name": "scan|search|read|write|apply|run|delete|move|copy" (required if action=tool_call),
+  "tool_args": {...} (required if action=tool_call, MUST be an object with the appropriate properties for the tool),
   "message": "Brief explanation of what you're doing, or final answer if done"
 }
 
 Examples:
-{"thinking": "Need to understand repo structure", "action": "tool_call", "tool_name": "scan", "tool_args": {"path": "."}, "message": "Scanning repository structure"}
-{"thinking": "Found the bug, task complete", "action": "done", "message": "Fixed the authentication bug in auth.py:42"}
+{"thinking": "Need to understand repo structure", "action": "tool_call", "tool_name": "scan", "tool_args": {"path": ".", "pattern": "", "max_results": 0, "start": 0, "limit": 0, "content": "", "overwrite": false, "filepath": "", "old_string": "", "new_string": "", "patch_path": "", "command": "", "timeout": 0, "confirm": false, "src": "", "dst": ""}, "message": "Scanning repository structure"}
+{"thinking": "User wants to read agent.py", "action": "tool_call", "tool_name": "read", "tool_args": {"path": "cappy/agent.py", "pattern": "", "max_results": 0, "start": 1, "limit": 0, "content": "", "overwrite": false, "filepath": "", "old_string": "", "new_string": "", "patch_path": "", "command": "", "timeout": 0, "confirm": false, "src": "", "dst": ""}, "message": "Reading cappy/agent.py"}
+{"thinking": "Found the bug, task complete", "action": "done", "tool_name": "scan", "tool_args": {"path": "", "pattern": "", "max_results": 0, "start": 0, "limit": 0, "content": "", "overwrite": false, "filepath": "", "old_string": "", "new_string": "", "patch_path": "", "command": "", "timeout": 0, "confirm": false, "src": "", "dst": ""}, "message": "Fixed the authentication bug in auth.py:42"}
 
 ## Rules
 - **BE AUTONOMOUS. DO NOT ASK PERMISSION. Just do the task.**
@@ -125,6 +198,8 @@ Examples:
 - One tool call at a time
 - Briefly explain what you're doing in the "message" field, then DO IT
 - If something fails, explain the error and fix it or suggest alternatives
+- **CRITICAL: tool_args MUST always include ALL 16 properties (path, pattern, max_results, start, limit, content, overwrite, filepath, old_string, new_string, patch_path, command, timeout, confirm, src, dst). Use empty strings "" for unused string properties, 0 for unused numbers, false for unused booleans.**
+- **IMPORTANT: When using read tool, set "path" to the file path and leave other properties as empty defaults**
 """
 
 
@@ -165,10 +240,35 @@ def get_system_prompt(cwd: Optional[str] = None) -> str:
 SYSTEM_PROMPT = BASE_SYSTEM_PROMPT
 
 
-def parse_agent_response(response: str) -> Optional[dict]:
+def normalize_tool_args(args: Union[dict, list, None]) -> dict:
+    """
+    Normalize tool_args to always be a dict.
+    
+    SecureChatAI with json_schema sometimes returns:
+    - Empty list [] instead of empty object {}
+    - None instead of {}
+    
+    This function ensures we always get a dict for safe .get() calls.
+    """
+    if args is None:
+        return {}
+    if isinstance(args, list):
+        # Empty list from AI -> empty dict
+        return {}
+    if isinstance(args, dict):
+        return args
+    # Fallback for any other type
+    return {}
+
+
+def parse_agent_response(response: Union[str, dict]) -> Optional[dict]:
     """
     Parse the AI's structured JSON response.
-
+    
+    Handles both string and dict inputs:
+    - When json_schema is used, SecureChatAI returns parsed dict directly
+    - Without json_schema, it returns a JSON string
+    
     Returns dict with parsed response data, or None if invalid.
     Expected format:
     {
@@ -180,8 +280,12 @@ def parse_agent_response(response: str) -> Optional[dict]:
     }
     """
     try:
-        # Try to parse as JSON directly
-        data = json.loads(response)
+        # Handle both string and dict responses
+        if isinstance(response, dict):
+            data = response
+        else:
+            # Try to parse as JSON string
+            data = json.loads(response)
 
         # Validate required fields
         if "action" not in data or "message" not in data:
@@ -190,25 +294,38 @@ def parse_agent_response(response: str) -> Optional[dict]:
         if data["action"] == "tool_call":
             if "tool_name" not in data or "tool_args" not in data:
                 return None
+            
+            # Normalize tool_args to dict (handles [] from AI)
+            data["tool_args"] = normalize_tool_args(data["tool_args"])
 
         return data
 
-    except json.JSONDecodeError:
+    except (json.JSONDecodeError, TypeError):
         # Fallback: try to extract JSON from markdown code blocks
-        match = re.search(r'```json\s*(.*?)\s*```', response, re.DOTALL)
-        if match:
-            try:
-                data = json.loads(match.group(1))
-                if "action" in data and "message" in data:
-                    return data
-            except json.JSONDecodeError:
-                pass
+        if isinstance(response, str):
+            match = re.search(r'```json\s*(.*?)\s*```', response, re.DOTALL)
+            if match:
+                try:
+                    data = json.loads(match.group(1))
+                    if "action" in data and "message" in data:
+                        # Normalize tool_args here too
+                        if "tool_args" in data:
+                            data["tool_args"] = normalize_tool_args(data["tool_args"])
+                        return data
+                except json.JSONDecodeError:
+                    pass
 
         return None
 
 
-def execute_tool(name: str, args: dict) -> dict:
-    """Execute a tool by name with given args."""
+def execute_tool(name: str, args: Union[dict, list, None]) -> dict:
+    """
+    Execute a tool by name with given args.
+    
+    Args are normalized to dict to handle edge cases from SecureChatAI.
+    """
+    # Normalize args to dict (handles [], None, etc.)
+    args = normalize_tool_args(args)
 
     if name == "scan":
         return tools.scan(args.get("path", "."))
@@ -348,14 +465,21 @@ def run_agent(
             }
 
         ai_response = response["content"]
-        messages.append(f"ASSISTANT: {ai_response}")
+        
+        # Convert dict to string for message history (if needed)
+        if isinstance(ai_response, dict):
+            ai_response_str = json.dumps(ai_response)
+        else:
+            ai_response_str = ai_response
+            
+        messages.append(f"ASSISTANT: {ai_response_str}")
 
         if verbose:
             # Print truncated response
-            display = ai_response[:500] + "..." if len(ai_response) > 500 else ai_response
+            display = ai_response_str[:500] + "..." if len(ai_response_str) > 500 else ai_response_str
             print(f"[ai] {display}\n")
 
-        # Parse structured response
+        # Parse structured response (handles both dict and string)
         parsed = parse_agent_response(ai_response)
         if not parsed:
             # Invalid response format - nudge the AI
@@ -401,7 +525,7 @@ def run_agent(
                     "tool_calls": tool_calls_made,
                 }
 
-            # Execute tool
+            # Execute tool (with normalized args)
             tool_result = execute_tool(tool_name, tool_args)
             tool_calls_made.append({
                 "name": tool_name,
